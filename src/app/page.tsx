@@ -229,7 +229,7 @@ export default function UploadPage() {
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", padding: 16 }}>
-      <h1 style={{ marginBottom: 8 }}>อัพโหลดไฟล์ .zip / .rar / .d23 / .g23</h1>
+      <h1 style={{ marginBottom: 8 }}>อัพโหลดไฟล์ .zip / .d23 / .g23</h1>
       <p style={{ color: "#555", marginBottom: 16 }}>
         เลือกไฟล์เพื่ออัพโหลดไปยังเซิร์ฟเวอร์ (จำกัด 200MB)
       </p>

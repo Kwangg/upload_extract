@@ -33,25 +33,6 @@ export async function POST(req: NextRequest) {
     const ext = path.extname(fileName).toLowerCase();
 
     if ([".zip", ".d23", ".g23"].includes(ext)) {
-      // Helper: resolve collision by appending (archiveName) and incremental index if needed
-      const ensureUniquePath = async (desiredPath: string): Promise<string> => {
-        const dir = path.dirname(desiredPath);
-        const { name, ext } = path.parse(desiredPath);
-        let candidate = desiredPath;
-        let index = 1;
-        while (true) {
-          try {
-            await fs.stat(candidate);
-            // exists -> make a new candidate
-            const suffix = index === 1 ? ` (2)` : ` (${index + 1})`;
-            candidate = path.join(dir, `${name}${suffix}${ext}`);
-            index++;
-          } catch {
-            // not exists
-            return candidate;
-          }
-        }
-      };
 
       // Place all extracted entries into subfolder named after the archive when outputDir provided
       const zipTargetDir = outputDir
@@ -62,36 +43,59 @@ export async function POST(req: NextRequest) {
       const reader = new zip.ZipReader(new zip.BlobReader(blob), { password });
       const entries = await reader.getEntries();
       const extractedEntries: string[] = [];
+      const skippedEntries: string[] = [];
+      let requiresPasswordFlag = false;
 
       for (const entry of entries) {
         if (entry.directory || !entry.getData) continue;
         // ถ้าระบุ targetEntry มา ให้แตกเฉพาะไฟล์นั้น
         if (targetEntry && entry.filename !== targetEntry) continue;
 
-        const writer = new zip.BlobWriter();
-        const data = await entry.getData(writer, {
-          password,
-          onprogress: async (progress, total) => {
-            // const percent = total && total > 0 ? Math.round((progress / total) * 100) : Math.round(progress * 100);
-            // console.log(`Extracting ${entry.filename}: ${percent}%`);
-          },
-        });
+        try {
+          const writer = new zip.BlobWriter();
+          const data = await entry.getData(writer, {
+            password,
+            onprogress: async () => {},
+          });
 
-        const desiredPath = path.join(zipTargetDir, entry.filename);
-        await fs.mkdir(path.dirname(desiredPath), { recursive: true });
-        const targetPath = await ensureUniquePath(desiredPath);
-        const buffer = Buffer.from(await data.arrayBuffer());
-        await fs.writeFile(targetPath, buffer);
-        const savedRel = path.relative(zipTargetDir, targetPath).split(path.sep).join("/");
-        extractedEntries.push(savedRel);
+          const desiredPath = path.join(zipTargetDir, entry.filename);
+          await fs.mkdir(path.dirname(desiredPath), { recursive: true });
+          const targetPath = desiredPath; // overwrite existing to avoid duplicates
+          const buffer = Buffer.from(await data.arrayBuffer());
+          await fs.writeFile(targetPath, buffer);
+          const savedRel = path.relative(zipTargetDir, targetPath).split(path.sep).join("/");
+          extractedEntries.push(savedRel);
+        } catch (e: any) {
+          // If password mismatch or encrypted entry, skip and flag
+          const msg = String(e?.message || "").toLowerCase();
+          if (msg.includes("password") || msg.includes("encrypt") || msg.includes("decryp")) {
+            requiresPasswordFlag = true;
+          }
+          skippedEntries.push(entry.filename);
+          continue;
+        }
       }
 
       await reader.close();
+
+      if (requiresPasswordFlag) {
+        return NextResponse.json(
+          {
+            message: "ZIP extracted with skipped entries",
+            extractedFiles: extractedEntries,
+            extractedGroups: [],
+            skipped: skippedEntries,
+            requiresPassword: true,
+          },
+          { status: 403 }
+        );
+      }
 
       return NextResponse.json({
         message: "ZIP extracted",
         extractedFiles: extractedEntries,
         extractedGroups: [],
+        skipped: skippedEntries,
       });
     }
 
