@@ -37,7 +37,7 @@ export default function G23Page() {
       const json = await res.json();
       if (json?.ok) {
         setPreview(json.previewHead || "");
-        setMessage(`ถอดรหัสสำเร็จ: สร้างไฟล์ ${json.outputRelative} (ขนาด ${json.size} ไบต์)`);
+        setMessage(`ถอดรหัสสำเร็จ (ขนาด ${json.size} ไบต์)`);
       } else {
         setMessage(json?.error || "ถอดรหัสไม่สำเร็จ");
       }

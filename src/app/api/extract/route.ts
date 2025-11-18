@@ -78,12 +78,19 @@ export async function POST(req: NextRequest) {
 
       await reader.close();
 
+      // Build group info for UI (to support nested extraction buttons for ZIP)
+      const group = {
+        zipRelative: fileName,
+        extractRelative: path.relative(path.join(process.cwd(), "uploads"), zipTargetDir),
+        entries: extractedEntries,
+      };
+
       if (requiresPasswordFlag) {
         return NextResponse.json(
           {
             message: "ZIP extracted with skipped entries",
             extractedFiles: extractedEntries,
-            extractedGroups: [],
+            extractedGroups: [group],
             skipped: skippedEntries,
             requiresPassword: true,
           },
@@ -94,7 +101,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         message: "ZIP extracted",
         extractedFiles: extractedEntries,
-        extractedGroups: [],
+        extractedGroups: [group],
         skipped: skippedEntries,
       });
     }

@@ -13,10 +13,7 @@ export async function POST(req: NextRequest) {
     }
 
     const abs = path.join(process.cwd(), "uploads", fileName);
-    const baseName = path.parse(abs).name;
-    const previewDir = path.join(process.cwd(), "uploads", "_preview");
-    await fs.mkdir(previewDir, { recursive: true });
-    const outPath = path.join(previewDir, `${baseName}.sql`);
+    // ไม่สร้างไฟล์หรือโฟลเดอร์ _preview อีกต่อไป
 
     const text = await fs.readFile(abs, "utf8");
     let decoded: Buffer;
@@ -26,11 +23,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "ไฟล์ไม่ใช่ base64 หรือเสียหาย" }, { status: 415 });
     }
 
-    await fs.writeFile(outPath, decoded);
     const head = decoded.subarray(0, Math.min(5000, decoded.length)).toString("utf8");
-    const outRel = path.relative(path.join(process.cwd(), "uploads"), outPath).split(path.sep).join("/");
-
-    return NextResponse.json({ ok: true, previewHead: head, outputRelative: outRel, size: decoded.length });
+    return NextResponse.json({ ok: true, previewHead: head, outputRelative: null, size: decoded.length, persisted: false });
   } catch (err) {
     console.error("g23 preview error:", err);
     return NextResponse.json({ ok: false, error: "ไม่สามารถถอดรหัสไฟล์ได้" }, { status: 500 });
