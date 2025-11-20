@@ -462,6 +462,9 @@ export default function UploadPage() {
                   tabIndex={0}
                   style={{
                     flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     border: "2px dashed #bbb",
                     borderRadius: 8,
                     padding: 24,
@@ -471,10 +474,13 @@ export default function UploadPage() {
                     cursor: "pointer",
                     textAlign: "center",
                   }}
-                  title="ลากไฟล์ .zip/.rar/.d23/.g23 มาวางที่นี่"
+                  title="ลากไฟล์มาวางที่นี่"
                 >
-                  <div style={{ fontSize: 14 }}>ลากไฟล์ .zip/.rar/.d23/.g23/.sql มาวางที่นี่</div>
-                  <div style={{ fontSize: 12, color: "#777" }}>หรือคลิกที่พื้นที่นี้เพื่อเลือกไฟล์</div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                    <img src="/file.svg" alt="Upload icon" width={44} height={44} style={{ opacity: 0.9 }} />
+                    <div style={{ fontSize: 14 }}>ลากไฟล์มาวางที่นี่</div>
+                     <div style={{ fontSize: 12, color: "#777" }}>หรือคลิกที่พื้นที่นี้เพื่อเลือกไฟล์</div>
+                  </div>
                 </div>
                 {/* แถบปุ่มด้านขวา: 2 บรรทัด */}
                 <div style={{ width: 260, display: "flex", flexDirection: "column", gap: 10 }}>
