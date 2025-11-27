@@ -1,2 +1,0 @@
-DROP DATABASE IF EXISTS cad_inventory;
-CREATE DATABASE IF NOT EXISTS cad_inventory;

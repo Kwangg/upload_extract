@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { ZipWriter, BlobWriter, Uint8ArrayReader } from "@zip.js/zip.js";
 import path from "path";
-import { emitToast } from "../components/Toast";
+import UploadSuccessModal from "../components/UploadSuccessModal";
 import PasswordModal from "../components/PasswordModal";
 import ZipNameModal from "../components/ZipNameModal";
 // ลบการใช้งาน ZipSummaryModal ตามคำขอ: แสดงสรุปที่ฝั่งขวาแทน Popup
@@ -31,10 +31,13 @@ export default function UploadPage() {
   const [zipPendingFiles, setZipPendingFiles] = useState<File[]>([]);
   const [zipName, setZipName] = useState<string>("");
   const [zipSummary, setZipSummary] = useState<{ name: string; entries: { name: string; size?: number }[]; total?: number } | null>(null);
+  const [zipCompleted, setZipCompleted] = useState<boolean>(false);
 
   // รายการไฟล์ที่อัพโหลด (สำหรับพาเนลด้านขวา)
   type UploadedItem = { displayName: string; relative: string; size: number; mime: string; uploadedAt: string };
   const [uploadedItems, setUploadedItems] = useState<UploadedItem[]>([]);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState<number>(-1);
+  const [successModalVisible, setSuccessModalVisible] = useState<boolean>(false);
   
   // Helper: เคลียร์สถานะก่อนเริ่มเลือกไฟล์ใหม่
   const resetBeforeSelect = () => {
@@ -50,6 +53,7 @@ export default function UploadPage() {
     setUploadedItems([]);
     // เคลียร์สรุป ZIP เพื่อซ่อนพาเนลขวาทันที
     setZipSummary(null);
+    setZipCompleted(false);
   };
 
   // Helper: เปิดโมดัลรับรหัส พร้อมตั้งข้อความและเคลียร์รหัสเดิม
@@ -64,6 +68,7 @@ export default function UploadPage() {
     if (!files || files.length === 0) return;
     try {
       setZipping(true);
+      setZipCompleted(false);
       const defaultName = files.length === 1 ? `${files[0].name.replace(/\.[^./]+$/, "")}.zip` : "archive.zip";
       const nameInput = (customName && customName.trim()) || defaultName;
       const zipName = nameInput.toLowerCase().endsWith(".zip") ? nameInput : `${nameInput}.zip`;
@@ -85,10 +90,14 @@ export default function UploadPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      // ไม่แสดง Popup/Toast หลังบีบอัดไฟล์ ให้สรุปไปแสดงฝั่งขวาแทน
+      // ไม่แสดง Popup หลังบีบอัดไฟล์ ให้สรุปไปแสดงเป็นสถานะด้านล่าง
       setZipSummary({ name: zipName, entries: summaryEntries, total: totalSize });
+      setZipCompleted(true);
+      // ล้างรายการไฟล์ที่เลือก ให้คงไว้เฉพาะแถบแจ้งเตือนด้านล่าง
+      setSelectedFiles([]);
     } catch (e) {
-      emitToast("error", "บีบอัดไฟล์ไม่สำเร็จ");
+    setMessage("บีบอัดไฟล์ไม่สำเร็จ");
+      setZipCompleted(false);
     } finally {
       setZipping(false);
       setZipPendingFiles([]);
@@ -99,19 +108,20 @@ export default function UploadPage() {
   // เริ่มบีบอัดจากไฟล์ที่เลือกไว้ในปุ่มเลือกไฟล์ (ไม่ต้องเลือกซ้ำ)
   const startZipFromSelected = () => {
     if (!selectedFiles || selectedFiles.length === 0) {
-      emitToast("warning", "กรุณาเลือกไฟล์ก่อนบีบอัด");
+    setMessage("กรุณาเลือกไฟล์ก่อนบีบอัด");
       return;
     }
+    setZipCompleted(false);
     setZipPendingFiles(selectedFiles);
     const defaultName = selectedFiles.length === 1
       ? `${selectedFiles[0].name.replace(/\.[^./]+$/, "")}.zip`
       : "archive.zip";
     setZipName(defaultName);
-    emitToast("info", "ตั้งชื่อ ZIP แล้วกดยืนยันเพื่อดาวน์โหลด");
+    setMessage("ตั้งชื่อ ZIP แล้วกดยืนยันเพื่อดาวน์โหลด");
   };
 
-  const toast = (type: "success" | "error" | "info" | "warning", message: string) => {
-    emitToast(type, message);
+  const toast = (type: "success" | "error" | "info" | "warning", msg: string) => {
+    setMessage(msg);
   };
 
   // Auto-extract ทุกไฟล์ใน entries หลัง upload สำเร็จ
@@ -174,12 +184,17 @@ export default function UploadPage() {
     const pwd = "bizpoten1234";
     // โฟลเดอร์ที่ไฟล์ซ้อนอยู่ (เช่น 1762332154016-______________________.zip จะอยู่ใน uploads/1762332154016-______________________/)
     const outputDir = path.dirname(archiveRelative);
+    const isZip = archiveRelative.toLowerCase().endsWith('.zip');
     try {
       setUploading(true);
       const res = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: archiveRelative, password: pwd, outputDir }),
+        body: JSON.stringify(
+          isZip
+            ? { fileName: archiveRelative, password: pwd }
+            : { fileName: archiveRelative, password: pwd, outputDir }
+        ),
       });
       const json = await res.json();
       if (res.ok) {
@@ -188,7 +203,7 @@ export default function UploadPage() {
         // ปรับให้ extractedFiles เป็น path สัมพันธ์กับ uploads โดยรวม base ของโฟลเดอร์แตกไฟล์
         const baseRel = Array.isArray(json.extractedGroups) && json.extractedGroups[0]?.extractRelative
           ? json.extractedGroups[0].extractRelative
-          : outputDir || path.dirname(archiveRelative);
+          : isZip ? path.dirname(archiveRelative) : (outputDir || path.dirname(archiveRelative));
         const normalized = (json.extractedFiles || []).map((e:string) => `${baseRel}/${e}`.replace(/\\/g, "/"));
         setExtractedFiles((prev) => [...prev, ...normalized]);
         setExtractedGroups((prev) => [...prev, ...(json.extractedGroups || [])]);
@@ -253,7 +268,7 @@ export default function UploadPage() {
     const allowed = files.filter((f) => [".zip", ".rar", ".d23", ".g23", ".sql"].some((ext) => f.name.toLowerCase().endsWith(ext)));
     if (allowed.length === 0) {
       setMessage("ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
-      emitToast("error", "ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
+      setMessage("ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
       return;
     }
     setSelectedFiles(allowed);
@@ -281,11 +296,11 @@ export default function UploadPage() {
     const allowed = files.filter((f) => [".zip", ".rar", ".d23", ".g23", ".sql"].some((ext) => f.name.toLowerCase().endsWith(ext)));
     if (allowed.length === 0) {
       setMessage("ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
-      emitToast("error", "ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
+      setMessage("ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ .zip, .rar, .d23, .g23, .sql)");
       return;
     }
     setSelectedFiles(allowed);
-    emitToast("info", `เลือกไฟล์แล้ว ${allowed.length} ไฟล์`);
+      setMessage(`เลือกไฟล์แล้ว ${allowed.length} ไฟล์`);
     // ไม่อัพโหลดอัตโนมัติ ให้ผู้ใช้กดปุ่มอัพโหลด
   };
 
@@ -303,6 +318,8 @@ export default function UploadPage() {
     setExtractedGroups([]);
 
     const aggregatedGroups: { zipRelative: string; extractRelative: string; entries: string[] }[] = [];
+    const zipsAfterUpload: string[] = [];
+    let successCount = 0;
 
     for (let i = 0; i < selectedFiles.length; i++) {
       const f = selectedFiles[i];
@@ -311,6 +328,7 @@ export default function UploadPage() {
         toast("error", `ชนิดไฟล์ไม่ถูกต้อง: ${f.name}`);
         continue;
       }
+      setCurrentUploadIndex(i);
 
       setMessage(`กำลังอัพโหลดไฟล์ ${i + 1}/${selectedFiles.length}: ${f.name}`);
       const form = new FormData();
@@ -392,6 +410,10 @@ export default function UploadPage() {
                     uploadedAt: new Date().toLocaleString(),
                   } as { displayName: string; relative: string; size: number; mime: string; uploadedAt: string };
                   setUploadedItems((prev) => [item, ...prev]);
+                  if (String(rel).toLowerCase().endsWith('.zip')) {
+                    zipsAfterUpload.push(rel);
+                  }
+                  successCount++;
                 }
               } else {
                 setMessage(data.error || "อัพโหลดไม่สำเร็จ");
@@ -409,9 +431,33 @@ export default function UploadPage() {
     }
 
     setUploading(false);
+    setCurrentUploadIndex(-1);
+    if (successCount > 0) {
+      // เคลียร์รายชื่อไฟล์ที่เลือก ให้เหลือเฉพาะรายการที่อัพโหลดสำเร็จ (Completed)
+      setSelectedFiles([]);
+      setProgress(0);
+      setSuccessModalVisible(true);
+    }
     if (aggregatedGroups.length > 0) {
       // เริ่มแตกไฟล์ทั้งหมดใน entries อัตโนมัติหลังอัพโหลดครบ
       autoExtractAll(aggregatedGroups);
+    }
+    // แตกไฟล์ .zip ที่อยู่ในรายการไฟล์ที่อัพโหลดแล้วอีกครั้ง (ตามคำขอ)
+    if (zipsAfterUpload.length > 0) {
+      for (const rel of zipsAfterUpload) {
+        await extractNestedArchive(rel);
+      }
+    }
+    // ตรวจหาไฟล์ .zip ที่อยู่ภายในผลการแตก (entries) แล้วแตกไฟล์ซ้อนเพิ่มเติม
+    if (aggregatedGroups.length > 0) {
+      const nestedZipRelatives = aggregatedGroups.flatMap((g) =>
+        g.entries
+          .filter((e) => e.toLowerCase().endsWith('.zip'))
+          .map((e) => `${g.extractRelative}/${e}`)
+      );
+      for (const nz of nestedZipRelatives) {
+        await extractNestedArchive(nz);
+      }
     }
   };
 
@@ -420,25 +466,25 @@ export default function UploadPage() {
       <h1 style={{ marginBottom: 8, fontSize: 24, fontWeight: 700 }}>File Upload Manager</h1>
       <p style={{ color: "#555", marginBottom: 16 }}>อัพโหลดและจัดการไฟล์ของคุณ</p>
       {(() => {
-        // เงื่อนไขการมี "รายละเอียดไฟล์" เพื่อให้ฝั่งขวาแสดงเฉพาะเมื่อมีรายละเอียดเท่านั้น
+        // ใช้เงื่อนไขเพื่อแบ่งหน้าเป็น 2 ฝั่งเฉพาะเมื่อมีไฟล์อัพโหลด/รายละเอียดแล้ว
         const uniqueExtracted = Array.from(new Set(extractedFiles));
         const nestedArchivesCount = uniqueExtracted.filter((rel) => {
           const lower = rel.toLowerCase();
           return lower.endsWith('.zip') || lower.endsWith('.rar');
         }).length;
         const hasDetails = Boolean(zipSummary || nestedArchivesCount > 0 || extractedFiles.length > 0 || extractedGroups.length > 0);
-        return (
-          <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-            {/* ซ้าย: ส่วนเลือกไฟล์และอัพโหลด (60%) - คงที่ และ sticky */}
-            <div style={{ flex: 3, position: "sticky", top: 24, alignSelf: "flex-start" }}>
+        const showRight = false;
+        const LeftCard = (
+            // ซ้าย: ส่วนเลือกไฟล์และอัพโหลด (การ์ดเดียวตรงกลางเมื่อยังไม่มีไฟล์อัพโหลด)
+            <div style={{ flex: showRight ? 3 : undefined, position: showRight ? "sticky" : undefined, top: showRight ? 24 : undefined, alignSelf: showRight ? "flex-start" : undefined }}>
               <div
                 style={{
                   border: "1px solid #ddd",
                   borderRadius: 8,
                   padding: 24,
                   display: "flex",
+                  flexDirection: "column",
                   gap: 16,
-                  alignItems: "stretch",
                 }}
               >
                 {/* พื้นที่ลาก-วางไฟล์ */}
@@ -465,12 +511,12 @@ export default function UploadPage() {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    border: "2px dashed #bbb",
-                    borderRadius: 8,
+                    border: "2px dashed #dad5f4",
+                    borderRadius: 14,
                     padding: 24,
-                    minHeight: 280,
-                    background: dragOver ? "#f0f9ff" : "#fafafa",
-                    color: "#555",
+                    minHeight: 180,
+                    background: dragOver ? "#f5f3ff" : "#fbfaff",
+                    color: "#5b5b66",
                     cursor: "pointer",
                     textAlign: "center",
                   }}
@@ -478,68 +524,131 @@ export default function UploadPage() {
                 >
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                     <img src="/file.svg" alt="Upload icon" width={44} height={44} style={{ opacity: 0.9 }} />
-                    <div style={{ fontSize: 14 }}>ลากไฟล์มาวางที่นี่</div>
-                     <div style={{ fontSize: 12, color: "#777" }}>หรือคลิกที่พื้นที่นี้เพื่อเลือกไฟล์</div>
+                    <div style={{ fontSize: 14, color: "#6b5bd2" }}>Click to Upload or drag and drop</div>
+                    <div style={{ fontSize: 12, color: "#8c8ca6" }}>(Max. file size: 200 MB)</div>
                   </div>
                 </div>
-                {/* แถบปุ่มด้านขวา: 2 บรรทัด */}
-                <div style={{ width: 260, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".zip,.rar,.d23,.g23,.sql,.SQL"
-                    multiple
-                    onChange={onFileChange}
-                    style={{ display: "none" }}
-                  />
-                  {/* ปุ่มอัพโหลด และ ปุ่มบีบอัดไฟล์ แยกบรรทัด */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <button
-                      onClick={() => onUpload()}
-                      disabled={selectedFiles.length === 0 || uploading}
-                      style={{
-                        width: "100%",
-                        padding: "8px 12px",
-                        borderRadius: 8,
-                        border: "1px solid #2563eb",
-                        background: "#2563eb",
-                        color: "#fff",
-                        cursor: selectedFiles.length === 0 || uploading ? "not-allowed" : "pointer",
-                        fontWeight: 600,
-                      }}
-                    >
-                      อัพโหลด
-                    </button>
-                    <button
-                      onClick={startZipFromSelected}
-                      disabled={zipping}
-                      style={{
-                        width: "100%",
-                        padding: "8px 12px",
-                        borderRadius: 8,
-                        border: "1px solid #999",
-                        background: "#fff",
-                        cursor: zipping ? "not-allowed" : "pointer",
-                        fontWeight: 600,
-                      }}
-                    >
-                      บีบอัดไฟล์ (ZIP)
-                    </button>
-                  </div>
+                {/* Hidden file input */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".zip,.rar,.d23,.g23,.sql,.SQL"
+                  multiple
+                  onChange={onFileChange}
+                  style={{ display: "none" }}
+                />
+
+                {/* ปุ่มส่วนท้ายอยู่ใต้ Dropzone */}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <button
+                    onClick={startZipFromSelected}
+                    disabled={selectedFiles.length === 0 || zipping}
+                    style={{
+                      flex: 1,
+                      padding: "10px 14px",
+                      borderRadius: 10,
+                      border: "1px solid #d1d5db",
+                      background: "#fff",
+                      color: "#4b5563",
+                      cursor: selectedFiles.length === 0 || zipping ? "not-allowed" : "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    บีบอัดไฟล์
+                  </button>
+                  <button
+                    onClick={() => onUpload()}
+                    disabled={selectedFiles.length === 0 || uploading}
+                    style={{
+                      flex: 1,
+                      padding: "10px 14px",
+                      borderRadius: 10,
+                      border: "1px solid #6b5bd2",
+                      background: "#6b5bd2",
+                      color: "#fff",
+                      cursor: selectedFiles.length === 0 || uploading ? "not-allowed" : "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    อัพโหลด
+                  </button>
+                </div>
                   {/* แสดงชื่อไฟล์ที่เลือกใต้ปุ่มอัพโหลด */}
                   {selectedFiles.length > 0 && (
-                    <div style={{ marginTop: 10, fontSize: 12, color: "#333" }}>
-                      เลือกไว้ ({selectedFiles.length} ไฟล์):
-                      <ul style={{ listStyle: "initial", paddingLeft: 18, margin: 6, maxHeight: 160, overflowY: "auto" }}>
-                        {selectedFiles.map((f, i) => (
-                          <li key={`${f.name}-${i}`}>
-                            <strong>{f.name}</strong> ({(f.size / (1024 * 1024)).toFixed(2)} MB)
-                          </li>
-                        ))}
-                      </ul>
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, color: "#7c7c88", marginBottom: 8 }}>
+                        {uploading
+                          ? `${selectedFiles.length} files uploading...`
+                          : zipping
+                            ? `กำลังบีบอัด (${selectedFiles.length})`
+                            : zipCompleted
+                              ? `บีบอัดสำเร็จ (${selectedFiles.length})`
+                              : `Selected (${selectedFiles.length})`}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {selectedFiles.map((f, i) => {
+                          const active = uploading && i === currentUploadIndex;
+                          return (
+                            <div key={`${f.name}-${i}`} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, background: "#fff", boxShadow: "0 6px 20px rgba(0,0,0,0.04)", display: "flex", alignItems: "center", gap: 12 }}>
+                              <div style={{ width: 36, height: 36, borderRadius: 8, background: "#f0ecff", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b5bd2", fontWeight: 700 }}>{(f.name.split('.').pop()||'').toUpperCase().slice(0,3)}</div>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 14 }}>{f.name}</div>
+                                <div style={{ fontSize: 12, color: "#8c8ca6" }}>{(f.size/(1024*1024)).toFixed(2)} MB</div>
+                                <div style={{ marginTop: 6, height: 6, borderRadius: 999, background: "#ece9ff" }}>
+                                  <div style={{ width: `${active ? progress : 0}%`, height: 6, borderRadius: 999, background: "#6b5bd2", transition: "width .2s ease" }} />
+                                </div>
+                              </div>
+                              {!uploading && (
+                                <button onClick={() => setSelectedFiles((prev)=>prev.filter((_,idx)=>idx!==i))} title="ลบไฟล์นี้" style={{ border: "none", background: "transparent", color: "#8c8ca6", cursor: "pointer", fontSize: 16 }}>✖</button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
-                </div>
+
+                  {uploadedItems.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, color: "#7c7c88", marginBottom: 8 }}>Completed</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {uploadedItems.map((it, idx) => (
+                          <div key={`${it.relative}-${idx}`} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, background: "#fff", boxShadow: "0 6px 20px rgba(0,0,0,0.04)", display: "flex", alignItems: "center", gap: 12 }}>
+                            <span style={{ fontSize: 18 }}>📦</span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 14 }}>{it.displayName}</div>
+                              <div style={{ fontSize: 12, color: "#8c8ca6" }}>{(it.size/(1024*1024)).toFixed(2)} MB</div>
+                            </div>
+                            <div style={{ fontSize: 16 }}>✔️</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {(zipping || zipCompleted) && (
+                    <div style={{ marginTop: 12, border: "1px solid #eee", borderRadius: 12, padding: 12, background: "#f9fafb", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 18 }}>{zipping ? "⏳" : "✅"}</span>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 600 }}>{zipping ? "กำลังบีบอัดไฟล์..." : "บีบอัดไฟล์สำเร็จ"}</div>
+                          {zipSummary && !zipping && (
+                            <div style={{ fontSize: 12, color: "#6b7280" }}>
+                              {zipSummary.name} • {zipSummary.entries.length} ไฟล์ • {zipSummary.total ? (zipSummary.total/(1024*1024)).toFixed(2) : "-"} MB
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {!zipping && (
+                        <button
+                          onClick={() => { setZipCompleted(false); setZipSummary(null); }}
+                          style={{ border: "1px solid #ddd", background: "#fff", padding: "6px 10px", borderRadius: 8, cursor: "pointer" }}
+                        >
+                          ล้างสถานะ
+                        </button>
+                      )}
+                    </div>
+                  )}
               </div>
               {/* ตั้งชื่อ ZIP: แสดงเป็น Popup Modal */}
               <ZipNameModal
@@ -550,7 +659,7 @@ export default function UploadPage() {
                 filesCount={zipPendingFiles.length}
                 onConfirm={() => {
                   if (!zipName.trim()) {
-                    emitToast("warning", "กรุณาตั้งชื่อไฟล์ ZIP");
+                setMessage("กรุณาตั้งชื่อไฟล์ ZIP");
                     return;
                   }
                   zipFilesAndDownload(zipPendingFiles, zipName.trim());
@@ -561,7 +670,21 @@ export default function UploadPage() {
                 }}
               />
             </div>
+        );
 
+        if (!showRight) {
+          // ยังไม่มีไฟล์อัพโหลด/รายละเอียด: แสดงการ์ดเดียวกลางหน้า
+          return (
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <div style={{ width: 560, maxWidth: "92vw" }}>{LeftCard}</div>
+            </div>
+          );
+        }
+
+        // มีไฟล์อัพโหลด/รายละเอียด: แบ่งฝั่งซ้าย-ขวา
+        return (
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+            {LeftCard}
             {/* ขวา: รายการไฟล์ที่อัพโหลด + รายละเอียด (40%) */}
             <div style={{ flex: 2 }}>
                 {/* สรุปการบีบอัดไฟล์ (ถ้ามี) */}
@@ -585,30 +708,7 @@ export default function UploadPage() {
                   </div>
                 )}
 
-                {/* รายการไฟล์ที่อัพโหลด (แสดงเฉพาะเมื่อมีไฟล์แล้ว) */}
-                {uploadedItems.length > 0 && (
-                  <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <div style={{ fontWeight: 600 }}>ไฟล์ที่อัพโหลด</div>
-                      <div style={{ fontSize: 12, padding: "4px 8px", borderRadius: 999, background: "#f1f5f9", color: "#333" }}>{uploadedItems.length} ไฟล์</div>
-                    </div>
-                    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-                      {uploadedItems.map((it, idx) => (
-                        <div key={`${it.relative}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid #eee", borderRadius: 8, padding: 10, background: "#fff" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <span style={{ fontSize: 18 }}>📦</span>
-                            <div>
-                              <div style={{ fontSize: 14, fontWeight: 600 }}>{it.displayName}</div>
-                              <div style={{ fontSize: 12, color: "#666" }}>{(it.size / (1024 * 1024)).toFixed(2)} MB • {it.mime || ""}</div>
-                              <div style={{ fontSize: 11, color: "#888" }}>{it.uploadedAt}</div>
-                            </div>
-                          </div>
-                          {/* ย้ายปุ่มแตกไฟล์ซ้อนไปอยู่ในหัวข้อรายละเอียดตามคำขอ */}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {/* เอารายการไฟล์ที่อัพโหลดออกจากฝั่งขวาตามคำขอ */}
                 {/* หัวข้อรายละเอียด (แสดงทุกไฟล์ที่แตกได้) */}
                 {hasDetails && (() => {
                   const uniqueExtracted = Array.from(new Set(extractedFiles));
@@ -657,23 +757,7 @@ export default function UploadPage() {
 
                 {/* เอาสรุปการแตกไฟล์อัตโนมัติออกตามคำขอ */}
 
-                <PasswordModal
-                  pendingFile={pendingPasswordFile}
-                  password={manualPassword}
-                  message={message}
-                  uploading={uploading}
-                  onChange={(value) => setManualPassword(value)}
-                  onCancel={() => setPendingPasswordFile(null)}
-                  onSubmit={() => {
-                    if (pendingPasswordFile) {
-                      extractWithPassword(
-                        pendingPasswordFile,
-                        manualPassword,
-                        path.dirname(pendingPasswordFile)
-                      );
-                    }
-                  }}
-                />
+                {/* PasswordModal moved outside to render independently of right panel */}
 
                 {/* รายการไฟล์ที่แตกได้ ถูกย้ายไปรวมกับ "ไฟล์ที่อัพโหลด" ด้านบน */}
               </div>
@@ -681,6 +765,32 @@ export default function UploadPage() {
           </div>
         );
       })()}
+      {/* Modals outside the main layout */}
+      <UploadSuccessModal
+        visible={successModalVisible}
+        onClose={() => setSuccessModalVisible(false)}
+        uploadedItems={uploadedItems}
+        zipSummary={zipSummary}
+        extractedFiles={Array.from(new Set(extractedFiles))}
+      />
+
+      <PasswordModal
+        pendingFile={pendingPasswordFile}
+        password={manualPassword}
+        message={message}
+        uploading={uploading}
+        onChange={(value) => setManualPassword(value)}
+        onCancel={() => setPendingPasswordFile(null)}
+        onSubmit={() => {
+          if (pendingPasswordFile) {
+            extractWithPassword(
+              pendingPasswordFile,
+              manualPassword,
+              path.dirname(pendingPasswordFile)
+            );
+          }
+        }}
+      />
     </main>
   );
 }

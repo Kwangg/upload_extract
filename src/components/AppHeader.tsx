@@ -11,8 +11,34 @@ export default function AppHeader({ username }: { username: string }) {
   }
 
   useEffect(() => {
-    let timer: any;
-    const check = async () => {
+    let verifyTimer: any;
+    let idleTimer: any;
+    let lastActivity = Date.now();
+    let lastRefreshAt = 0;
+
+    const markActive = () => {
+      lastActivity = Date.now();
+      // รีเซ็ตตัวจับ inactivity 20 นาที
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        const next = window.location.pathname + window.location.search;
+        window.location.href = `/login?next=${encodeURIComponent(next)}`;
+      }, 20 * 60 * 1000);
+
+      // ต่ออายุคุกกี้ session (throttle ~1 นาที)
+      const now = Date.now();
+      if (now - lastRefreshAt > 60 * 1000) {
+        lastRefreshAt = now;
+        fetch("/api/auth/refresh", { method: "POST" }).catch(() => {});
+      }
+    };
+
+    window.addEventListener("mousemove", markActive);
+    window.addEventListener("mousedown", markActive);
+    window.addEventListener("keydown", markActive);
+    window.addEventListener("touchstart", markActive);
+
+    const verifyServerSession = async () => {
       try {
         const res = await fetch("/api/auth/session");
         if (res.status === 401) {
@@ -21,11 +47,26 @@ export default function AppHeader({ username }: { username: string }) {
         }
       } catch {}
     };
-    // ตรวจทุก ๆ 10 นาที เพื่อเด้งทันทีเมื่อ session หมดอายุ
-    timer = setInterval(check, 600000);
-    // เรียกตรวจทันทีหนึ่งครั้งตอน mount
-    check();
-    return () => clearInterval(timer);
+
+    // ตั้ง idle timer ครั้งแรก 20 นาที
+    idleTimer = setTimeout(() => {
+      const next = window.location.pathname + window.location.search;
+      window.location.href = `/login?next=${encodeURIComponent(next)}`;
+    }, 20 * 60 * 1000);
+
+    // ตรวจสถานะ session ทุก ๆ 5 นาที เพื่อความแน่นอน
+    verifyTimer = setInterval(verifyServerSession, 5 * 60 * 1000);
+    // ตรวจทันทีครั้งแรก
+    verifyServerSession();
+
+    return () => {
+      clearInterval(verifyTimer);
+      clearTimeout(idleTimer);
+      window.removeEventListener("mousemove", markActive);
+      window.removeEventListener("mousedown", markActive);
+      window.removeEventListener("keydown", markActive);
+      window.removeEventListener("touchstart", markActive);
+    };
   }, [pathname]);
 
   const UserIcon = ({ size = 20, color = '#444' }: { size?: number; color?: string }) => (
