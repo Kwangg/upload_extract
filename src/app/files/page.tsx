@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 
-type DirItem = { name: string; type: "dir" | "file" };
+type DirItem = { name: string; type: "dir" | "file"; mtime?: string; size?: number };
 
 // ตั้งค่าเริ่มต้นให้ชี้ไปยัง root ของ uploads โดยใช้ '.'
 const DEFAULT_REL_PATH = ".";
@@ -44,7 +44,9 @@ export default function FilesPage() {
     try {
       const res = await fetch(`/api/files/preview?path=${encodeURIComponent(rel)}&lines=1`);
       const data = await res.json();
-      const kids: DirItem[] = data?.ok && data?.type === "directory" ? (data.children || []) : [];
+      let kids: DirItem[] = data?.ok && data?.type === "directory" ? (data.children || []) : [];
+      // กรองไม่ให้แสดงไฟล์ .zip ใน tree
+      kids = kids.filter((d) => !(d.type === "file" && d.name.toLowerCase().endsWith(".zip")));
       setTree((prev) => ({
         ...prev,
         [rel]: { expanded: true, children: kids, loading: false },
@@ -205,6 +207,10 @@ export default function FilesPage() {
       <div>
         {kids.map((it) => {
           const childPath = rel === "." ? it.name : `${rel}/${it.name}`;
+          // ซ่อนไฟล์ .zip ในมุมมอง tree
+          if (it.type === "file" && it.name.toLowerCase().endsWith(".zip")) {
+            return null;
+          }
           if (it.type === "dir") {
             const childNode = tree[childPath];
             const expanded = childNode?.expanded || false;
@@ -279,21 +285,27 @@ export default function FilesPage() {
       {/* มุมมองเริ่มต้น: ยังไม่เลือกเปิดโฟลเดอร์ (path = '.') ใช้รายการแบบตารางขอบมน */}
       {path === "." && !selectedFile ? (
         <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
-          <div style={{ border: "1px solid #e5e5e5", borderRadius: 12, overflow: "hidden", width: "100%", maxWidth: 880, margin: "0 auto" }}>
+          <div style={{ border: "1px solid #e5e5e5", borderRadius: 12, overflow: "hidden", width: "100%", maxWidth: 980, margin: "0 auto" }}>
             {/* หัวตาราง */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 0, padding: "10px 12px", background: "#fafafa", borderBottom: "1px solid #eee", fontWeight: 600 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 240px", columnGap: 12, padding: "10px 12px", background: "#fafafa", borderBottom: "1px solid #eee", fontWeight: 600 }}>
               <div>ชื่อ</div>
               <div style={{ textAlign: "right" }}>ประเภท</div>
+              <div style={{ textAlign: "right" }}>อัพโหลดเมื่อ</div>
             </div>
             {/* รายการจาก root */}
             {(() => {
-              const kids = tree["."]?.children || [];
+              let kids = tree["."]?.children || [];
               if (!kids.length) {
                 return <div style={{ padding: "12px 14px", color: "#777" }}>ไม่มีรายการในโฟลเดอร์นี้</div>;
               }
               return kids.map((it, idx) => {
                 const childPath = it.name; // root + name
                 const isLast = idx === kids.length - 1;
+                const uploadedAt = it.mtime ? new Date(it.mtime).toLocaleString() : "-";
+                // ซ่อนไฟล์ .zip
+                if (it.type === "file" && it.name.toLowerCase().endsWith(".zip")) {
+                  return null;
+                }
                 return (
                   <div
                     key={`root-row-${childPath}`}
@@ -309,8 +321,8 @@ export default function FilesPage() {
                     }}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1fr 120px",
-                      gap: 0,
+                      gridTemplateColumns: "1fr 120px 240px",
+                      columnGap: 12,
                       padding: "12px 14px",
                       borderBottom: isLast ? "none" : "1px solid #eee",
                       cursor: "pointer",
@@ -323,6 +335,7 @@ export default function FilesPage() {
                       <span>{it.name}</span>
                     </div>
                     <div style={{ textAlign: "right", color: "#555" }}>{it.type === "dir" ? "โฟลเดอร์" : "ไฟล์"}</div>
+                <div style={{ textAlign: "right", color: "#555" }}>{uploadedAt}</div>
                   </div>
                 );
               });
@@ -435,19 +448,25 @@ export default function FilesPage() {
                   })()}
                 </div>
                 <div style={{ marginTop: 8, border: "1px solid #e5e5e5", borderRadius: 12, overflow: "hidden", background: "#fff", flex: 1 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 0, padding: "10px 12px", background: "#fafafa", borderBottom: "1px solid #eee", fontWeight: 600 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 240px", columnGap: 12, padding: "10px 12px", background: "#fafafa", borderBottom: "1px solid #eee", fontWeight: 600 }}>
                     <div>ชื่อ</div>
                     <div style={{ textAlign: "right" }}>ประเภท</div>
+                    <div style={{ textAlign: "right" }}>อัพโหลดเมื่อ</div>
                   </div>
                   {(() => {
                     const relPath = normalizeRel(path);
-                    const kids = (tree[relPath]?.children) || [];
+                    let kids = (tree[relPath]?.children) || [];
                     if (!kids.length) {
                       return <div style={{ padding: "12px 14px", color: "#777" }}>ไม่มีรายการในโฟลเดอร์นี้</div>;
                     }
                     return kids.map((it, idx) => {
                       const nextRel = path === "." ? `./${it.name}` : `${path}/${it.name}`;
                       const isLast = idx === kids.length - 1;
+                      const uploadedAt = it.mtime ? new Date(it.mtime).toLocaleString() : "-";
+                      // ซ่อนไฟล์ .zip
+                      if (it.type === "file" && it.name.toLowerCase().endsWith(".zip")) {
+                        return null;
+                      }
                       return (
                         <div
                           key={`right-row-${nextRel}`}
@@ -462,8 +481,8 @@ export default function FilesPage() {
                           }}
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "1fr 120px",
-                            gap: 0,
+                            gridTemplateColumns: "1fr 120px 240px",
+                            columnGap: 12,
                             padding: "12px 14px",
                             borderBottom: isLast ? "none" : "1px solid #eee",
                             cursor: "pointer",
@@ -476,6 +495,7 @@ export default function FilesPage() {
                             <span>{it.name}</span>
                           </div>
                           <div style={{ textAlign: "right", color: "#555" }}>{it.type === "dir" ? "โฟลเดอร์" : "ไฟล์"}</div>
+                          <div style={{ textAlign: "right", color: "#555" }}>{uploadedAt}</div>
                         </div>
                       );
                     });

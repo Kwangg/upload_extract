@@ -25,11 +25,23 @@ export async function GET(request: Request) {
     const stat = await fs.promises.stat(absPath);
     if (stat.isDirectory()) {
       const items = await fs.promises.readdir(absPath, { withFileTypes: true });
+      const children = await Promise.all(
+        items.map(async (d) => {
+          const childAbs = path.resolve(absPath, d.name);
+          const st = await fs.promises.stat(childAbs);
+          return {
+            name: d.name,
+            type: d.isDirectory() ? 'dir' : 'file',
+            mtime: st.mtime.toISOString(),
+            size: d.isDirectory() ? undefined : st.size,
+          } as { name: string; type: 'dir' | 'file'; mtime?: string; size?: number };
+        })
+      );
       return NextResponse.json({
         ok: true,
         type: 'directory',
         path: relPath,
-        children: items.map((d) => ({ name: d.name, type: d.isDirectory() ? 'dir' : 'file' })),
+        children,
       });
     }
 

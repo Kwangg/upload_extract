@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import path from "path";
 import * as zip from "@zip.js/zip.js";
 import { createExtractorFromFile } from "node-unrar-js";
+import StreamZip from "node-stream-zip";
+import * as yauzl from "yauzl";
 
 // Helper สำหรับแปลง Windows path → URL file:// ที่ extractor ต้องการ
 const toExtractorPath = (p: string) => (process.platform === "win32" ? `file:///${p.replace(/\\/g, "/")}` : p);
@@ -13,6 +15,7 @@ export async function POST(req: NextRequest) {
     const fileName = (body?.fileName as string) || "";
     // ใช้รหัสผ่านเริ่มต้น 1234 โดยอัตโนมัติ หากไม่ได้ส่งมา
     const password = String(body?.password ?? "bizpoten1234");
+    const userProvidedPassword = body?.password !== undefined && String(body?.password).trim() !== "";
     // หากต้องการแตกเฉพาะ entry ใดๆ ให้ส่ง targetEntry มา
     const targetEntry = (body?.targetEntry as string) || null;
     // path สำหรับแตกไฟล์ ถ้าไม่ส่งมา จะสร้างใหม่เอง
@@ -85,25 +88,97 @@ export async function POST(req: NextRequest) {
         entries: extractedEntries,
       };
 
+      // หากแตกได้บางส่วน ให้ตอบ 200 พร้อมรายการที่ข้าม และแจ้ง requiresPassword เป็น true เพื่อให้ผู้ใช้ลองรหัสใหม่ได้
+      if (extractedEntries.length > 0) {
+        return NextResponse.json({
+          message: "ZIP extracted (บางไฟล์อาจถูกข้าม)",
+          extractedFiles: extractedEntries,
+          extractedGroups: [group],
+          skipped: skippedEntries,
+          requiresPassword: skippedEntries.length > 0,
+        });
+      }
+
+      // แตกไม่ได้เลยและพบสัญญาณว่าต้องใช้รหัสผ่าน → ลอง fallback ด้วย node-stream-zip หากผู้ใช้ส่งรหัสมา
       if (requiresPasswordFlag) {
+        if (userProvidedPassword) {
+          try {
+            const zipAsync = new (StreamZip as any).async({ file: filePath, password });
+            if (!targetEntry) {
+              await zipAsync.extract(null, zipTargetDir);
+            } else {
+              const targetPath = path.join(zipTargetDir, targetEntry);
+              await fs.mkdir(path.dirname(targetPath), { recursive: true });
+              await zipAsync.extract(targetEntry, targetPath);
+            }
+            await zipAsync.close();
+
+            const finalEntries = extractedEntries.length > 0 ? extractedEntries : (targetEntry ? [targetEntry] : []);
+            const finalGroup = {
+              zipRelative: fileName,
+              extractRelative: path.relative(path.join(process.cwd(), "uploads"), zipTargetDir),
+              entries: finalEntries,
+            };
+
+            return NextResponse.json({
+              message: "ZIP extracted",
+              extractedFiles: finalEntries,
+              extractedGroups: [finalGroup],
+              skipped: [],
+            });
+          } catch (e: any) {
+            const msg = String(e?.message || "").toLowerCase();
+            const pwdHints = ["wrong password", "decryption failed", "encrypted", "invalid password", "auth failed"];
+            if (pwdHints.some((h) => msg.includes(h))) {
+              // แนบรายชื่อไฟล์ที่เข้ารหัส (ถ้าระบุได้) ให้ผู้ใช้เห็น
+              const encryptedEntries = await new Promise<string[]>((resolve) => {
+                const list: string[] = [];
+                yauzl.open(filePath, { lazyEntries: true, decodeStrings: false }, (err, zipfile) => {
+                  if (err || !zipfile) return resolve(list);
+                  zipfile.readEntry();
+                  zipfile.on("entry", (entry: any) => {
+                    const isDir = String(entry.fileName || "").endsWith("/");
+                    const isEncrypted = (entry.generalPurposeBitFlag & 0x1) !== 0;
+                    if (!isDir && isEncrypted) list.push(String(entry.fileName));
+                    zipfile.readEntry();
+                  });
+                  zipfile.on("end", () => resolve(list));
+                  zipfile.on("error", () => resolve(list));
+                });
+              });
+              return NextResponse.json(
+                { error: "รหัสผ่านไม่ถูกต้อง กรุณากรอกรหัสใหม่", requiresPassword: true, encryptedEntries },
+                { status: 403 }
+              );
+            }
+            return NextResponse.json({ error: "ไม่สามารถแตกไฟล์ ZIP ได้" }, { status: 500 });
+          }
+        }
+
+        // ไม่มีรหัสผ่านจากผู้ใช้ → แจ้งให้กรอกรหัสผ่าน พร้อมรายการไฟล์ที่เข้ารหัสถ้าระบุได้
+        const encryptedEntries = await new Promise<string[]>((resolve) => {
+          const list: string[] = [];
+          yauzl.open(filePath, { lazyEntries: true, decodeStrings: false }, (err, zipfile) => {
+            if (err || !zipfile) return resolve(list);
+            zipfile.readEntry();
+            zipfile.on("entry", (entry: any) => {
+              const isDir = String(entry.fileName || "").endsWith("/");
+              const isEncrypted = (entry.generalPurposeBitFlag & 0x1) !== 0;
+              if (!isDir && isEncrypted) list.push(String(entry.fileName));
+              zipfile.readEntry();
+            });
+            zipfile.on("end", () => resolve(list));
+            zipfile.on("error", () => resolve(list));
+          });
+        });
         return NextResponse.json(
-          {
-            message: "ZIP extracted with skipped entries",
-            extractedFiles: extractedEntries,
-            extractedGroups: [group],
-            skipped: skippedEntries,
-            requiresPassword: true,
-          },
+          { error: "ไฟล์ ZIP นี้เข้ารหัส ต้องใช้รหัสผ่าน", requiresPassword: true, encryptedEntries },
           { status: 403 }
         );
       }
 
-      return NextResponse.json({
-        message: "ZIP extracted",
-        extractedFiles: extractedEntries,
-        extractedGroups: [group],
-        skipped: skippedEntries,
-      });
+      // กรณีอื่น ๆ ที่ไม่สามารถแตกได้
+      return NextResponse.json({ error: "ไม่สามารถแตกไฟล์ ZIP ได้" }, { status: 500 });
     }
 
     if (ext === ".rar") {

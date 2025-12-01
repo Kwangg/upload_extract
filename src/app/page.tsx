@@ -95,14 +95,123 @@ export default function UploadPage() {
       setZipCompleted(true);
       // ล้างรายการไฟล์ที่เลือก ให้คงไว้เฉพาะแถบแจ้งเตือนด้านล่าง
       setSelectedFiles([]);
+
+      // อัพโหลดไฟล์ ZIP ที่บีบอัดโดยอัตโนมัติ
+      try {
+        await uploadGeneratedZip(blob, zipName);
+      } catch (e) {
+        setMessage("อัพโหลดไฟล์ที่บีบอัดไม่สำเร็จ");
+        toast("error", "อัพโหลดไฟล์ที่บีบอัดไม่สำเร็จ");
+      }
     } catch (e) {
-    setMessage("บีบอัดไฟล์ไม่สำเร็จ");
+      setMessage("บีบอัดไฟล์ไม่สำเร็จ");
       setZipCompleted(false);
     } finally {
       setZipping(false);
       setZipPendingFiles([]);
       setZipName("");
     }
+  };
+
+  // อัพโหลดไฟล์ ZIP ที่สร้างจากการบีบอัด
+  const uploadGeneratedZip = async (blob: Blob, zipFileName: string) => {
+    const file = new File([blob], zipFileName, { type: "application/zip" });
+    setMessage(`กำลังอัพโหลดไฟล์ที่บีบอัด: ${zipFileName}`);
+    setUploading(true);
+    setProgress(0);
+    setCurrentUploadIndex(0);
+
+    const form = new FormData();
+    form.append("file", file);
+
+    await new Promise<void>((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/upload");
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
+          const pct = Math.round((evt.loaded / evt.total) * 100);
+          setProgress(pct);
+        }
+      };
+      xhr.onreadystatechange = async () => {
+        if (xhr.readyState === XMLHttpRequest.DONE) {
+          try {
+            const data = JSON.parse(xhr.responseText || "{}");
+            if (xhr.status >= 200 && xhr.status < 300) {
+              if (data.requiresPassword) {
+                const pwd = "bizpoten1234";
+                if (data.fileName) {
+                  try {
+                    const res = await fetch("/api/extract", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ fileName: data.fileName, password: pwd }),
+                    });
+                    const json = await res.json();
+                    if (res.ok) {
+                      setMessage(`แตกไฟล์ด้วยรหัสผ่านสำเร็จ: ${data.fileName}`);
+                      toast("success", `อัพโหลดและแตกไฟล์สำเร็จ: ${data.fileName}`);
+                      const baseRel = Array.isArray(json.extractedGroups) && json.extractedGroups[0]?.extractRelative
+                        ? json.extractedGroups[0].extractRelative
+                        : path.dirname(data.fileName);
+                      const normalized = (json.extractedFiles || []).map((e: string) => `${baseRel}/${e}`.replace(/\\/g, "/"));
+                      setExtractedFiles((prev) => [...prev, ...normalized]);
+                      if (json.extractedGroups && Array.isArray(json.extractedGroups)) {
+                        setExtractedGroups((prev) => [...prev, ...json.extractedGroups]);
+                      }
+                    } else {
+                      if (json?.requiresPassword) {
+                        openPasswordModal(data.fileName, json.error || "ต้องใช้รหัสผ่าน กรุณากรอกรหัสเพื่อแตกไฟล์");
+                      } else {
+                        setMessage(json.error || "แตกไฟล์ด้วยรหัสผ่านไม่สำเร็จ");
+                        toast("error", json.error || "แตกไฟล์ด้วยรหัสผ่านไม่สำเร็จ");
+                      }
+                    }
+                  } catch (e) {
+                    setMessage("เกิดข้อผิดพลาดในการแตกไฟล์ด้วยรหัสผ่าน");
+                    toast("error", "เกิดข้อผิดพลาดในการแตกไฟล์ด้วยรหัสผ่าน");
+                  }
+                } else {
+                  setMessage("ไม่พบชื่อไฟล์สำหรับการแตกไฟล์ด้วยรหัสผ่าน");
+                  toast("error", "ไม่พบชื่อไฟล์สำหรับการแตกไฟล์ด้วยรหัสผ่าน");
+                }
+              } else {
+                setMessage(`อัพโหลดไฟล์ที่บีบอัดสำเร็จ: ${data.fileName ?? zipFileName}`);
+                toast("success", `อัพโหลดสำเร็จ: ${data.fileName ?? zipFileName}`);
+                const rel = data.fileName ?? zipFileName;
+                const item = {
+                  displayName: zipFileName,
+                  relative: rel,
+                  size: file.size,
+                  mime: "application/zip",
+                  uploadedAt: new Date().toLocaleString(),
+                } as { displayName: string; relative: string; size: number; mime: string; uploadedAt: string };
+                setUploadedItems((prev) => [item, ...prev]);
+                if (data.extractedFiles && data.extractedFiles.length > 0) {
+                  setExtractedFiles((prev) => [...prev, ...data.extractedFiles]);
+                }
+                if (data.extractedGroups && Array.isArray(data.extractedGroups)) {
+                  setExtractedGroups((prev) => [...prev, ...data.extractedGroups]);
+                  // แตกไฟล์เพิ่มเติมถ้ามี nested groups
+                  autoExtractAll(data.extractedGroups);
+                }
+              }
+            } else {
+              setMessage(data.error || "อัพโหลดไม่สำเร็จ");
+              toast("error", data.error || "อัพโหลดไม่สำเร็จ");
+            }
+          } catch {
+            setMessage("อัพโหลดไม่สำเร็จ");
+            toast("error", "อัพโหลดไม่สำเร็จ");
+          }
+          resolve();
+        }
+      };
+      xhr.send(form);
+    });
+
+    setUploading(false);
+    setCurrentUploadIndex(-1);
   };
 
   // เริ่มบีบอัดจากไฟล์ที่เลือกไว้ในปุ่มเลือกไฟล์ (ไม่ต้องเลือกซ้ำ)
@@ -243,6 +352,14 @@ export default function UploadPage() {
         const normalized = (json.extractedFiles || []).map((e:string) => `${baseRel}/${e}`.replace(/\\/g, "/"));
         setExtractedFiles((prev) => [...prev, ...normalized]);
         setExtractedGroups((prev) => [...prev, ...(json.extractedGroups || [])]);
+        // แตกไฟล์ซ้อนอัตโนมัติสำหรับไฟล์ที่เป็น .zip/.rar/.g23/.d23 ที่ได้จากการแตกด้วยรหัสผ่าน
+        const nestedCandidates = normalized.filter((p) => [".zip", ".rar", ".g23", ".d23"].some((ext) => p.toLowerCase().endsWith(ext)));
+        for (const rel of nestedCandidates) {
+          await extractNestedArchive(rel);
+        }
+        // เปิด UploadSuccessModal เพื่อให้การแจ้งผลเหมือนตอนอัพโหลดปกติ
+        setSuccessModalVisible(true);
+        // ปิด PasswordModal ทันทีหลังแตกไฟล์สำเร็จ
         setPendingPasswordFile(null);
       } else {
         if (json?.requiresPassword) {
@@ -463,8 +580,7 @@ export default function UploadPage() {
 
   return (
     <main style={{ maxWidth: 1080, margin: "24px auto", padding: 16 }}>
-      <h1 style={{ marginBottom: 8, fontSize: 24, fontWeight: 700 }}>File Upload Manager</h1>
-      <p style={{ color: "#555", marginBottom: 16 }}>อัพโหลดและจัดการไฟล์ของคุณ</p>
+      
       {(() => {
         // ใช้เงื่อนไขเพื่อแบ่งหน้าเป็น 2 ฝั่งเฉพาะเมื่อมีไฟล์อัพโหลด/รายละเอียดแล้ว
         const uniqueExtracted = Array.from(new Set(extractedFiles));
